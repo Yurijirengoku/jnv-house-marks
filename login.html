@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Login - JNV Cleaning</title>
+  <style>
+    html, body {
+      margin: 0; padding: 0;
+      height: 100vh; width: 100vw;
+      overflow: hidden;
+      background-color: wheat;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      color: #333;
+    }
+    #loginForm {
+  position: fixed;
+  width: 400px;
+  height: 350px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 1rem;
+  padding: 2rem 2.5rem;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+  max-width: 95vw;
+  max-height: 95vh;
+  overflow: hidden;
+}
+
+@media (max-width: 600px) {
+  #loginForm {
+    width: 80vw !important;     /* 80% of viewport width */
+    height: auto !important;    /* let height fit content */
+    max-width: 350px !important; /* max width smaller than before */
+    max-height: none !important;
+    padding: 2rem 1.5rem !important;
+    border-radius: 1rem !important;
+  }
+}
+
+    #loginForm h2 {
+      font-weight: 700;
+      margin-bottom: 1.5rem;
+      text-align: center;
+      letter-spacing: 1.2px;
+      color: #5b4636;
+    }
+    #loginForm input {
+      border-radius: 0.5rem;
+      font-size: 16px; /* Important for iOS */
+      padding: 0.75rem 1rem;
+      border: 1px solid #c9b899;
+      margin-bottom: 1.5rem;
+    }
+    #loginForm button {
+      border-radius: 0.6rem;
+      font-weight: 600;
+      font-size: 1.1rem;
+      padding: 0.75rem 1rem;
+      background-color: #003366;
+      border: none;
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(0, 51, 102, 0.6);
+      transition: background-color 0.3s ease;
+      cursor: pointer;
+    }
+    #loginForm button:hover {
+      background-color: #002244;
+      box-shadow: 0 6px 20px rgba(0, 34, 68, 0.8);
+      color: #e0e0e0;
+    }
+  </style>
+</head>
+<body>
+
+  <form id="loginForm">
+    <h2>Welcome to JNV Cleaning</h2>
+    <input
+      type="text"
+      id="username"
+      placeholder="Enter your name"
+      autocomplete="off"
+      required
+      minlength="2"
+      maxlength="30"
+    />
+    <button type="submit">Enter</button>
+  </form>
+<script>
+    // Disable pinch zoom
+    document.addEventListener('touchstart', function(event) {
+      if (event.touches.length > 1) {
+        event.preventDefault();
+      }
+    }, { passive: false });
+
+    // Disable double-tap zoom
+    let lastTouchEnd = 0;
+    document.addEventListener('touchend', function(event) {
+      const now = (new Date()).getTime();
+      if (now - lastTouchEnd <= 300) {
+        event.preventDefault();
+      }
+      lastTouchEnd = now;
+    }, false);
+
+    // Form submit handler
+    document.getElementById('loginForm').addEventListener('submit', e => {
+      e.preventDefault();
+      const username = document.getElementById('username').value.trim();
+      if (!username) {
+        alert('Please enter your name');
+        return;
+      }
+      localStorage.setItem('judgeName', username);
+      window.location.href = 'index.html';
+    });
+
+ // Show popup if query string has "msg"
+  const urlParams = new URLSearchParams(window.location.search);
+  const msg = urlParams.get('msg');
+  if (msg) {
+      alert(msg);
+  }
+
+const db = firebase.firestore();
+const judgesCollection = db.collection('judges');
+
+// When user tries to log in and enter marks
+async function attemptLogin(userId) {
+    const snapshot = await judgesCollection.get();
+    if (snapshot.size >= 3) {
+        alert("❌ Already 3 users have entered the marks. Try next week again.");
+        return; // Stop here
+    }
+
+    // If this user is new, add them to the collection
+    await judgesCollection.doc(userId).set({
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    // Redirect to marks entry page
+    window.location.href = 'login.html';
+}
+
+  </script>
+<script>
+const urlParams = new URLSearchParams(window.location.search);
+const msg = urlParams.get('msg');
+if (msg) {
+    alert(msg); // Popup for user
+}
+</script>
+
+</body>
+</html>
