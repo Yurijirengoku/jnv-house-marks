@@ -5,159 +5,152 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <title>Login - JNV Cleaning</title>
   <style>
-    html, body {
-      margin: 0; padding: 0;
-      height: 100vh; width: 100vw;
-      overflow: hidden;
-      background-color: wheat;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      color: #333;
-    }
-    #loginForm {
-  position: fixed;
-  width: 400px;
-  height: 350px;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: rgba(255, 255, 255, 0.95);
-  border-radius: 1rem;
-  padding: 2rem 2.5rem;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.1);
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: stretch;
-  max-width: 95vw;
-  max-height: 95vh;
-  overflow: hidden;
-}
-
-@media (max-width: 600px) {
-  #loginForm {
-    width: 80vw !important;     /* 80% of viewport width */
-    height: auto !important;    /* let height fit content */
-    max-width: 350px !important; /* max width smaller than before */
-    max-height: none !important;
-    padding: 2rem 1.5rem !important;
-    border-radius: 1rem !important;
-  }
-}
-
-    #loginForm h2 {
-      font-weight: 700;
-      margin-bottom: 1.5rem;
-      text-align: center;
-      letter-spacing: 1.2px;
-      color: #5b4636;
-    }
-    #loginForm input {
-      border-radius: 0.5rem;
-      font-size: 16px; /* Important for iOS */
-      padding: 0.75rem 1rem;
-      border: 1px solid #c9b899;
-      margin-bottom: 1.5rem;
-    }
-    #loginForm button {
-      border-radius: 0.6rem;
-      font-weight: 600;
-      font-size: 1.1rem;
-      padding: 0.75rem 1rem;
-      background-color: #003366;
-      border: none;
-      color: #fff;
-      box-shadow: 0 4px 12px rgba(0, 51, 102, 0.6);
-      transition: background-color 0.3s ease;
-      cursor: pointer;
-    }
-    #loginForm button:hover {
-      background-color: #002244;
-      box-shadow: 0 6px 20px rgba(0, 34, 68, 0.8);
-      color: #e0e0e0;
-    }
+    html, body { margin:0; padding:0; height:100vh; width:100vw; background-color:wheat; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color:#333; }
+    #loginForm { position: fixed; width:420px; top:50%; left:50%; transform:translate(-50%,-50%); background:rgba(255,255,255,0.98); border-radius:1rem; padding:2rem 2.5rem; box-shadow:0 12px 30px rgba(0,0,0,0.12); display:flex; flex-direction:column; gap:.5rem; max-width:95vw; }
+    @media (max-width:600px){ #loginForm{ width:92vw; padding:1.2rem; } }
+    #loginForm h2{ font-weight:700; margin:0 0 .6rem; text-align:center; color:#5b4636; font-size:1.4rem; }
+    label.small{ display:block; font-size:.9rem; font-weight:600; margin-bottom:6px; }
+    #username{ border-radius:.6rem; font-size:16px; padding:.75rem 1rem; border:1px solid #c9b899; outline:none; }
+    #enterBtn{ border-radius:.6rem; font-weight:700; font-size:1rem; padding:.8rem; background:#003366; border:none; color:#fff; cursor:pointer; box-shadow:0 6px 18px rgba(0,51,102,0.2); }
+    #enterBtn:disabled{ opacity:.6; cursor:not-allowed; }
+    #enterBtn:hover:not(:disabled){ background:#002244; }
+    #errorMsg{ color:#b02a37; text-align:center; min-height:1.25rem; }
+    .small-muted{ font-size:.85rem; color:#6b7280; text-align:center; margin-top:.6rem; }
   </style>
 </head>
 <body>
 
-  <form id="loginForm">
+  <form id="loginForm" autocomplete="off">
     <h2>Welcome to JNV Cleaning</h2>
-    <input
-      type="text"
-      id="username"
-      placeholder="Enter your name"
-      autocomplete="off"
-      required
-      minlength="2"
-      maxlength="30"
-    />
-    <button type="submit">Enter</button>
+
+    <label class="small" for="username">Judge Name</label>
+    <input id="username" name="username" type="text" placeholder="Enter your name" minlength="2" maxlength="40" required />
+
+    <div id="errorMsg" aria-live="polite"></div>
+
+    <button id="enterBtn" type="submit">Enter</button>
+
+    <div class="small-muted">Only 3 judges allowed. Your name will be saved for this session.</div>
   </form>
-<script>
-    // Disable pinch zoom
-    document.addEventListener('touchstart', function(event) {
-      if (event.touches.length > 1) {
-        event.preventDefault();
-      }
-    }, { passive: false });
 
-    // Disable double-tap zoom
-    let lastTouchEnd = 0;
-    document.addEventListener('touchend', function(event) {
-      const now = (new Date()).getTime();
-      if (now - lastTouchEnd <= 300) {
-        event.preventDefault();
-      }
-      lastTouchEnd = now;
-    }, false);
+  <script type="module">
+import { db } from './firebase-config.js';
+import {
+  collection,
+  getDocs,
+  query,
+  where,
+  addDoc,
+  serverTimestamp
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-    // Form submit handler
-    document.getElementById('loginForm').addEventListener('submit', e => {
-      e.preventDefault();
-      const username = document.getElementById('username').value.trim();
-      if (!username) {
-        alert('Please enter your name');
-        return;
-      }
-      localStorage.setItem('judgeName', username);
-      window.location.href = 'index.html';
+function $(id){ return document.getElementById(id); }
+function showError(text){ $('errorMsg').textContent = text || ''; }
+
+function withTimeout(promise, ms = 10000) {
+  let timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms));
+  return Promise.race([promise, timeout]);
+}
+
+// ✅ Put this before form handler so it exists when we call it
+async function canJudgeLogin() {
+    const scoresRef = collection(db, "scores");
+    const snapshot = await getDocs(scoresRef);
+
+    // Count unique judges
+    const judgesSet = new Set();
+    snapshot.forEach(doc => {
+        const data = doc.data();
+        if (data.judge) {
+            judgesSet.add(data.judge);
+        }
     });
 
- // Show popup if query string has "msg"
-  const urlParams = new URLSearchParams(window.location.search);
-  const msg = urlParams.get('msg');
-  if (msg) {
-      alert(msg);
+    // Only allow up to 3 judges
+    return judgesSet.size < 3;
+}
+
+const form = $('loginForm');
+const usernameInput = $('username');
+const enterBtn = $('enterBtn');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  showError('');
+  const name = usernameInput.value.trim();
+
+  if (!name || name.length < 2) {
+    showError('Please enter a valid name (2+ characters).');
+    return;
   }
 
-const db = firebase.firestore();
-const judgesCollection = db.collection('judges');
+  enterBtn.disabled = true;
+  const previousText = enterBtn.textContent;
+  enterBtn.textContent = 'Checking...';
 
-// When user tries to log in and enter marks
-async function attemptLogin(userId) {
-    const snapshot = await judgesCollection.get();
-    if (snapshot.size >= 3) {
-        alert("❌ Already 3 users have entered the marks. Try next week again.");
-        return; // Stop here
+  if (!db) {
+    const ok = confirm('Firebase not available. Use local login for testing?');
+    if (ok) {
+      localStorage.setItem('judgeName', name);
+      localStorage.setItem('judgeId', 'local-' + Math.random().toString(36).slice(2,9));
+      window.location.href = 'index.html';
+      return;
+    } else {
+      enterBtn.disabled = false;
+      enterBtn.textContent = previousText;
+      showError('Cannot log in without Firebase.');
+      return;
+    }
+  }
+
+  try {
+    // 1) If a doc with the same name already exists -> reuse its doc id
+    const sameNameQ = query(collection(db, 'judges'), where('name', '==', name));
+    const sameNameSnap = await withTimeout(getDocs(sameNameQ), 10000);
+
+    if (sameNameSnap && sameNameSnap.size > 0) {
+      const existingDoc = sameNameSnap.docs[0];
+      localStorage.setItem('judgeName', name);
+      localStorage.setItem('judgeId', existingDoc.id);
+      window.location.href = 'index.html';
+      return;
     }
 
-    // If this user is new, add them to the collection
-    await judgesCollection.doc(userId).set({
-        timestamp: firebase.firestore.FieldValue.serverTimestamp()
-    });
+    // 2) Check if less than 3 judges have submitted scores
+    const allowed = await canJudgeLogin();
+    if (!allowed) {
+      showError('Login limit reached. Only 3 judges allowed. Try again next week.');
+      enterBtn.disabled = false;
+      enterBtn.textContent = previousText;
+      return;
+    }
 
-    // Redirect to marks entry page
-    window.location.href = 'login.html';
-}
+    // 3) Create a new judge (allowed because < 3 judges with scores)
+    const newRef = await withTimeout(addDoc(collection(db, 'judges'), { name: name, createdAt: serverTimestamp() }), 10000);
 
-  </script>
-<script>
-const urlParams = new URLSearchParams(window.location.search);
-const msg = urlParams.get('msg');
-if (msg) {
-    alert(msg); // Popup for user
-}
+    localStorage.setItem('judgeName', name);
+    localStorage.setItem('judgeId', newRef.id);
+    window.location.href = 'index.html';
+
+  } catch (err) {
+    console.error('Login error:', err);
+    const fallback = confirm('Could not contact Firebase (network, rules or timeout). Do you want to continue with local login for testing?');
+    if (fallback) {
+      localStorage.setItem('judgeName', name);
+      localStorage.setItem('judgeId', 'local-' + Math.random().toString(36).slice(2,9));
+      window.location.href = 'index.html';
+      return;
+    } else {
+      showError('Login failed. Check console for details.');
+    }
+  } finally {
+    enterBtn.disabled = false;
+    enterBtn.textContent = previousText;
+  }
+});
 </script>
+
+
 
 </body>
 </html>

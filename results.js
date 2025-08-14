@@ -1,186 +1,319 @@
-import { collection, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { db } from './firebase-config.js';
+import { collection, getDocs, query, where, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-const HOUSES = ['Aravali', 'Nilgiri', 'Shivalik', 'Udaigiri'];
-const CRITERIA_KEYS = ['decoration', 'items', 'inside_clean', 'fan_tube', 'footpath', 'grass', 'surrounding'];
+// DOM references
+const housesContainer = document.getElementById("housesContainer");
+const averagesTableBody = document.querySelector("#averagesTable tbody");
+const metaEl = document.getElementById("meta");
+const refreshBtn = document.getElementById("refreshBtn");
+const exportBtn = document.getElementById("exportCsvBtn");
+const categoryFilter = document.getElementById("categoryFilter");
+const alertArea = document.getElementById("alertArea");
+const backToLoginBtn = document.getElementById("backToLoginBtn"); // Add button in HTML
 
-const housesContainer = document.getElementById('housesContainer');
-const averagesTableBody = document.querySelector('#averagesTable tbody');
-const alertArea = document.getElementById('alertArea');
-const meta = document.getElementById('meta');
+let allEntries = [];
 
-// Fetch all scores from Firestore
-async function fetchAllScores() {
-  const scoresCol = collection(db, 'judges_scores'); // correct collection
-  const snapshot = await getDocs(scoresCol);
-  return snapshot.docs.map(doc => doc.data());
+// Event listeners
+document.addEventListener("DOMContentLoaded", () => loadResults());
+refreshBtn.addEventListener("click", handleRefresh);
+categoryFilter.addEventListener("change", () => renderResults(allEntries));
+exportBtn.addEventListener("click", exportCSV);
+if (backToLoginBtn) {
+  backToLoginBtn.addEventListener("click", () => {
+    window.location.href = "login.html"; // change to your actual login page
+  });
 }
 
-// Calculate averages
-function aggregateScores(allScores) {
-  const totalScores = {};
-  const criteriaTotals = {};
-  const judgesCount = allScores.length;
+// -------------------------
+// Load + normalize data
+// -------------------------
+async function loadResults() {
+  metaEl.textContent = "Loading results...";
+  housesContainer.innerHTML = "";
+  averagesTableBody.innerHTML = "";
+  alertArea.innerHTML = "";
 
-  HOUSES.forEach(house => {
-    totalScores[house] = 0;
-    criteriaTotals[house] = {};
-    CRITERIA_KEYS.forEach(c => criteriaTotals[house][c] = 0);
-  });
+  try {
+    const docs = [];
 
-  allScores.forEach(judgeEntry => {
-    const houses = judgeEntry.houses;
-    if (!houses) return;
-    HOUSES.forEach(house => {
-      if (houses[house]) {
-        CRITERIA_KEYS.forEach(c => {
-          criteriaTotals[house][c] += houses[house][c] || 0;
-        });
-        totalScores[house] += houses[house].total || 0;
+    try {
+      const snap = await getDocs(collection(db, "scores"));
+      snap.forEach(d => docs.push({ id: d.id, data: d.data(), col: "scores" }));
+    } catch (e) {
+      console.warn("Error reading 'scores' collection:", e);
+    }
+
+    try {
+      const snap2 = await getDocs(collection(db, "judges_scores"));
+      snap2.forEach(d => docs.push({ id: d.id, data: d.data(), col: "judges_scores" }));
+    } catch (e) {
+      // ignore if missing
+    }
+
+    if (docs.length === 0) {
+      metaEl.textContent = "No score documents found.";
+      return;
+    }
+
+    const entries = [];
+    for (const docObj of docs) {
+      const d = docObj.data || {};
+      const category = String(d.category || "").trim().toLowerCase();
+      const judge = d.judge || d.judgeName || "";
+
+      if (d.scores && typeof d.scores === "object") {
+        for (const [houseName, raw] of Object.entries(d.scores)) {
+          const normalized = normalizeHouseScores(raw);
+          entries.push({ house: houseName.trim() || "Unknown", category, judge, ...normalized });
+        }
+        continue;
       }
-    });
-  });
 
-  const averages = {};
-  HOUSES.forEach(house => {
-    averages[house] = {};
-    CRITERIA_KEYS.forEach(c => {
-      averages[house][c] = (criteriaTotals[house][c] / judgesCount) || 0;
-    });
-    averages[house].total = (totalScores[house] / judgesCount) || 0;
-  });
+      const topKeys = Object.keys(d);
+      const metadataKeys = new Set(["category", "judge", "createdAt", "timestamp", "judgeName"]);
+      const possibleHouseKeys = topKeys.filter(k => {
+        const v = d[k];
+        return v && typeof v === "object" && Object.keys(v).length > 0;
+      });
+      const hasHouseLike = possibleHouseKeys.some(k => !metadataKeys.has(k));
 
-  return averages;
+      if (hasHouseLike) {
+        for (const k of possibleHouseKeys) {
+          if (metadataKeys.has(k)) continue;
+          const normalized = normalizeHouseScores(d[k]);
+          entries.push({ house: k.trim() || "Unknown", category, judge, ...normalized });
+        }
+        continue;
+      }
+
+      if (d.house) {
+        const normalized = normalizeHouseScores(d);
+        entries.push({ house: d.house.trim() || "Unknown", category, judge, ...normalized });
+        continue;
+      }
+
+      const normalized = normalizeHouseScores(d);
+      if (Object.values(normalized).some(v => typeof v === "number" && v !== 0)) {
+        entries.push({ house: "Unknown", category, judge, ...normalized });
+      }
+    }
+
+    allEntries = entries;
+    renderResults(allEntries);
+
+  } catch (err) {
+    console.error("Error loading results:", err);
+    metaEl.textContent = "Error loading results — check console.";
+  }
 }
 
-// Find winner
-function findWinner(averages) {
-  let winner = null;
-  let maxScore = -Infinity;
-  for (const house in averages) {
-    if (averages[house].total > maxScore) {
-      maxScore = averages[house].total;
-      winner = house;
+// -------------------------
+// Normalization helper
+// -------------------------
+function normalizeHouseScores(raw) {
+  const out = { decoration: 0, items: 0, dorm: 0, fanTube: 0, footpath: 0, grass: 0, surrounding: 0, total: 0 };
+
+  if (raw == null) return out;
+
+  if (typeof raw === "number") { out.total = raw; return out; }
+  if (typeof raw === "string" && raw.trim() !== "" && !isNaN(Number(raw))) {
+    out.total = Number(raw); return out;
+  }
+
+  for (const [k, v] of Object.entries(raw)) {
+    const key = String(k).toLowerCase().replace(/[\s_\-]/g, "");
+    const num = Number(v);
+    const hasNumber = !isNaN(num);
+
+    if (key.includes("decor")) out.decoration = hasNumber ? num : out.decoration;
+    else if (key.includes("item")) out.items = hasNumber ? num : out.items;
+    else if (key.includes("dorm") || key.includes("inside") || key.includes("bed")) out.dorm = hasNumber ? num : out.dorm;
+    else if (key.includes("fan") || key.includes("tube")) out.fanTube = hasNumber ? num : out.fanTube;
+    else if (key.includes("foot")) out.footpath = hasNumber ? num : out.footpath;
+    else if (key.includes("grass")) out.grass = hasNumber ? num : out.grass;
+    else if (key.includes("surround")) out.surrounding = hasNumber ? num : out.surrounding;
+    else if (key.includes("total") || key.includes("sum")) out.total = hasNumber ? num : out.total;
+    else if (v && typeof v === "object") {
+      for (const [k2, v2] of Object.entries(v)) {
+        const k2n = String(k2).toLowerCase();
+        const n2 = Number(v2);
+        if (isNaN(n2)) continue;
+        if (k2n.includes("decor")) out.decoration += n2;
+        else if (k2n.includes("item")) out.items += n2;
+        else if (k2n.includes("dorm") || k2n.includes("inside")) out.dorm += n2;
+        else if (k2n.includes("fan") || k2n.includes("tube")) out.fanTube += n2;
+        else if (k2n.includes("foot")) out.footpath += n2;
+        else if (k2n.includes("grass")) out.grass += n2;
+        else if (k2n.includes("surround")) out.surrounding += n2;
+        else out.total += n2;
+      }
+    } else if (hasNumber) {
+      out.total += num;
     }
   }
-  return winner;
+
+  if (!out.total) {
+    out.total = Number((out.decoration + out.items + out.dorm + out.fanTube + out.footpath + out.grass + out.surrounding).toFixed(2));
+  }
+
+  return out;
 }
 
-// Render results in UI
-function renderResults(averages, winner) {
-  housesContainer.innerHTML = '';
-  averagesTableBody.innerHTML = '';
+// -------------------------
+// Render + aggregation
+// -------------------------
+function renderResults(entries) {
+  const category = (categoryFilter.value || "").trim().toLowerCase();
+  const filtered = category === "overall" || category === "" ? entries : entries.filter(e => (String(e.category || "").trim().toLowerCase()) === category);
 
-  alertArea.innerHTML = `<div class="alert alert-success" role="alert">
-    🏆 Winner: <strong>${winner}</strong> with <strong>${averages[winner].total.toFixed(2)}</strong> average points!
-  </div>`;
+  if (!filtered.length) {
+    metaEl.textContent = "No results for selected category.";
+    housesContainer.innerHTML = "";
+    averagesTableBody.innerHTML = "";
+    return;
+  }
 
-  for (const house of HOUSES) {
-    const card = document.createElement('div');
-    card.className = 'col-12 col-md-6 ' + (house === winner ? 'winner' : '');
+  metaEl.textContent = `Showing ${category || "overall"} category (${filtered.length} entries)`;
+
+  const houseMap = {};
+  filtered.forEach(e => {
+    const h = e.house || "Unknown";
+    if (!houseMap[h]) houseMap[h] = [];
+    houseMap[h].push(e);
+  });
+
+  const houseResults = Object.keys(houseMap).map(house => {
+    const list = houseMap[house];
+    const avg = arr => arr.reduce((a, b) => a + b, 0) / arr.length || 0;
+
+    const decoration = avg(list.map(x => x.decoration));
+    const items = avg(list.map(x => x.items));
+    const dorm = avg(list.map(x => x.dorm));
+    const fanTube = avg(list.map(x => x.fanTube));
+    const footpath = avg(list.map(x => x.footpath));
+    const grass = avg(list.map(x => x.grass));
+    const surrounding = avg(list.map(x => x.surrounding));
+    const total = decoration + items + dorm + fanTube + footpath + grass + surrounding;
+
+    return { house, decoration, items, dorm, fanTube, footpath, grass, surrounding, total };
+  });
+
+  houseResults.sort((a, b) => b.total - a.total);
+  houseResults.forEach((h, i) => h.rank = i + 1);
+
+  housesContainer.innerHTML = "";
+  houseResults.forEach((h, idx) => {
+    const card = document.createElement("div");
+    card.className = "col-md-4";
     card.innerHTML = `
-      <div class="card p-3 ${house === winner ? 'winner' : ''}">
-        <h5>${house}</h5>
-        <ul>
-          ${CRITERIA_KEYS.map(c => `<li>${c.replace('_', ' ')}: ${averages[house][c].toFixed(2)}</li>`).join('')}
-          <li><strong>Total: ${averages[house].total.toFixed(2)}</strong></li>
-        </ul>
+      <div class="card h-100 ${idx === 0 ? "winner" : ""}">
+        <div class="card-body">
+          <h5 class="card-title">${escapeHtml(h.house)}</h5>
+          <p>Total Score: <strong>${h.total.toFixed(2)}</strong></p>
+          <p>Rank: ${h.rank}</p>
+        </div>
       </div>
     `;
     housesContainer.appendChild(card);
-  }
-
-  let rank = 1;
-  const sortedHouses = Object.keys(averages).sort((a,b) => averages[b].total - averages[a].total);
-  for (const house of sortedHouses) {
-    const tr = document.createElement('tr');
-    tr.className = house === winner ? 'table-success' : '';
-    tr.innerHTML = `
-      <td>${house}</td>
-      <td>${averages[house].decoration.toFixed(2)}</td>
-      <td>${averages[house].items.toFixed(2)}</td>
-      <td>${averages[house].inside_clean.toFixed(2)}</td>
-      <td>${averages[house].fan_tube.toFixed(2)}</td>
-      <td>${averages[house].footpath.toFixed(2)}</td>
-      <td>${averages[house].grass.toFixed(2)}</td>
-      <td>${averages[house].surrounding.toFixed(2)}</td>
-      <td><strong>${averages[house].total.toFixed(2)}</strong></td>
-      <td>${rank++}</td>
-    `;
-    averagesTableBody.appendChild(tr);
-  }
-}
-
-// Main loader
-async function loadAndRenderResults() {
-  try {
-    meta.textContent = 'Loading results...';
-    alertArea.innerHTML = '';
-    const allScores = await fetchAllScores();
-    if (allScores.length === 0) {
-      meta.textContent = 'No scores submitted yet.';
-      return;
-    }
-    const averages = aggregateScores(allScores);
-    const winner = findWinner(averages);
-    renderResults(averages, winner);
-    meta.textContent = `Showing results from ${allScores.length} judge(s).`;
-  } catch (error) {
-    meta.textContent = 'Error loading results.';
-    alertArea.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
-    console.error(error);
-  }
-}
-
-// Export CSV
-function exportResultsToCSV() {
-  const table = document.getElementById('averagesTable');
-  let csv = [];
-  const rows = table.querySelectorAll('tr');
-  rows.forEach(row => {
-    let cells = row.querySelectorAll('th, td');
-    let rowData = [];
-    cells.forEach(cell => rowData.push(`"${cell.textContent.trim()}"`));
-    csv.push(rowData.join(','));
   });
-  const blob = new Blob([csv.join('\n')], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.setAttribute('href', url);
-  link.setAttribute('download', 'results.csv');
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+
+  averagesTableBody.innerHTML = "";
+  houseResults.forEach(h => {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${escapeHtml(h.house)}</td>
+      <td>${h.decoration.toFixed(2)}</td>
+      <td>${h.items.toFixed(2)}</td>
+      <td>${h.dorm.toFixed(2)}</td>
+      <td>${h.fanTube.toFixed(2)}</td>
+      <td>${h.footpath.toFixed(2)}</td>
+      <td>${h.grass.toFixed(2)}</td>
+      <td>${h.surrounding.toFixed(2)}</td>
+      <td><strong>${h.total.toFixed(2)}</strong></td>
+      <td>${h.rank}</td>
+    `;
+    averagesTableBody.appendChild(row);
+  });
 }
 
-// Hook buttons
-const refreshBtn = document.getElementById('refreshBtn');
-refreshBtn.textContent = 'Exit';
-refreshBtn.addEventListener('click', async () => {
-  if (confirm("⚠ This will permanently erase all results. Continue?")) {
-    try {
-      const batch = writeBatch(db);
+// -------------------------
+// Refresh / Delete helper
+// -------------------------
+async function handleRefresh() {
+  const category = (categoryFilter.value || "").trim().toLowerCase();
+  if (!category) {
+    alert("Please select a category before refreshing.");
+    return;
+  }
 
-      // Delete all judges
-      const judgesSnap = await getDocs(collection(db, 'judges'));
-      judgesSnap.forEach(doc => batch.delete(doc.ref));
+  const answer = confirm(`Delete ALL scores for "${category}" category and reset judge logins? This cannot be undone.`);
+  if (!answer) return;
 
-      // Delete all scores
-      const scoresSnap = await getDocs(collection(db, 'judges_scores')); // fixed collection
-      scoresSnap.forEach(doc => batch.delete(doc.ref));
+  await clearCategoryScores(category);
+  await clearJudgeLogins();
 
-      await batch.commit();
+  showAlert(`All "${category}" scores and judge logins deleted.`, "danger");
+  await loadResults();
+}
 
-      alert("✅ Please re-enter the marks next week again.");
-      window.location.href = 'login.html?msg=Please%20re-enter%20the%20marks%20next%20week%20again';
-    } catch (error) {
-      console.error("Error deleting data:", error);
-      alert("❌ Failed to erase data. Check permissions.");
+async function clearCategoryScores(category) {
+  const collectionsToClear = ["scores", "judges_scores"];
+
+  let categoriesToDelete = [];
+  if (category === "overall") {
+    categoriesToDelete = ["boys", "girls"];
+  } else {
+    categoriesToDelete = [category];
+  }
+
+  for (const colName of collectionsToClear) {
+    for (const cat of categoriesToDelete) {
+      try {
+        const qSnap = await getDocs(query(collection(db, colName), where("category", "==", cat)));
+        for (const d of qSnap.docs) {
+          await deleteDoc(doc(db, colName, d.id));
+        }
+      } catch (e) {
+        console.error(`Error deleting ${cat} in ${colName}:`, e);
+      }
     }
   }
-});
+}
 
-document.getElementById('exportCsvBtn').addEventListener('click', exportResultsToCSV);
+async function clearJudgeLogins() {
+  try {
+    const qSnap = await getDocs(collection(db, "judgeLogins"));
+    for (const d of qSnap.docs) {
+      await deleteDoc(doc(db, "judgeLogins", d.id));
+    }
+  } catch (e) {
+    console.error("Error deleting judge logins:", e);
+  }
+}
 
-// Initial load
-loadAndRenderResults();
+// -------------------------
+// Utilities
+// -------------------------
+function exportCSV() {
+  const rows = document.querySelectorAll("table tr");
+  const csv = Array.from(rows).map(row => {
+    const cols = row.querySelectorAll("td, th");
+    return Array.from(cols).map(c => `"${String(c.innerText).replace(/"/g, '""')}"`).join(",");
+  }).join("\n");
+
+  const blob = new Blob([csv], { type: "text/csv" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "results.csv";
+  link.click();
+}
+
+function showAlert(msg, type = "info") {
+  alertArea.innerHTML = `<div class="alert alert-${type}">${escapeHtml(msg)}</div>`;
+}
+
+function escapeHtml(s) {
+  return String(s || "").replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
+}

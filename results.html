@@ -26,6 +26,11 @@
         <div id="meta" class="small-muted">Loading results...</div>
       </div>
       <div class="text-end">
+        <select id="categoryFilter" class="form-select form-select-sm mb-2" style="width:auto;display:inline-block;">
+          <option value="boys">Boys</option>
+          <option value="girls">Girls</option>
+          <option value="overall">Overall</option>
+        </select>
         <button id="refreshBtn" class="btn btn-outline-primary btn-sm mb-2">Refresh</button>
         <button id="exportCsvBtn" class="btn btn-outline-secondary btn-sm mb-2">Export CSV</button>
       </div>
@@ -60,6 +65,20 @@
           </table>
         </div>
       </div>
+    </div>
+
+    <!-- Back button -->
+    <div class="text-center mt-4">
+      <button onclick="window.location.href='login.html'" style="
+          background-color: #007bff;
+          color: white;
+          padding: 10px 20px;
+          border: none;
+          border-radius: 5px;
+          cursor: pointer;
+      ">
+          🔙 Back to Judge Login
+      </button>
     </div>
 
     <p class="text-center text-muted small mt-3">Tip: Ensure all 3 judges submit for accurate final ranking.</p>

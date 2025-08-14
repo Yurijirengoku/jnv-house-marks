@@ -1,13 +1,20 @@
+// main.js (replace your existing main.js with this)
 import { db } from './firebase-config.js';
-import { doc, setDoc, serverTimestamp, getDocs, collection } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import {
+  doc,
+  setDoc,
+  getDoc,
+  getDocs,
+  collection,
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-// Houses & criteria
+// Houses & criteria (kept same as before)
 const HOUSES = ['Aravali', 'Nilgiri', 'Shivalik', 'Udaigiri'];
 const CRITERIA = [
   { key: 'decoration', label: 'Display House Decoration', max: 20 },
   { key: 'items', label: 'Display Items & Belongings', max: 20 },
-  { key: 'inside_clean', label: 'Cleanliness Inside Dorm', max: 10 },
-  { key: 'fan_tube', label: 'Status of Fan & Tube', max: 10 },
+  { key: 'dorm', label: 'Cleanliness Inside Dorm', max: 10 },
+  { key: 'fanTube', label: 'Status of Fan & Tube', max: 10 },
   { key: 'footpath', label: 'Cleanliness of Surrounding Footpath', max: 10 },
   { key: 'grass', label: 'Cleanliness of Grass & Bushes', max: 10 },
   { key: 'surrounding', label: 'Cleanliness of Surrounding', max: 20 }
@@ -18,12 +25,22 @@ const housesContainer = document.getElementById('housesContainer');
 const submitBtn = document.getElementById('submitBtn');
 const clearBtn = document.getElementById('clearBtn');
 const judgeNameDisplay = document.getElementById('judgeNameDisplay');
+const categorySelect = document.getElementById('categorySelect');
 
-const judgeName = localStorage.getItem('judgeName') || 'Unknown Judge';
+const judgeName = localStorage.getItem('judgeName') || '';
+const judgeId = localStorage.getItem('judgeId') || ''; // important!
+
+// If no judge logged in, redirect
+if (!judgeName || !judgeId) {
+  alert('Please login first as a judge.');
+  window.location.href = 'login.html';
+}
+
+// show judge name
 if (judgeNameDisplay) judgeNameDisplay.textContent = judgeName;
 
-// Disable submit if judge missing
-if (submitBtn) submitBtn.disabled = (judgeName === 'Unknown Judge');
+// Disable submit initially
+if (submitBtn) submitBtn.disabled = true;
 
 // Create select DOM for a criterion
 function createSelect(id, max) {
@@ -96,10 +113,14 @@ function updateHouseTotal(house) {
   if (totalEl) totalEl.textContent = `Total: ${sum}`;
 }
 
-// Enable submit only if all > 0
+// Enable submit only if all > 0 and category selected
 function checkIfCanSubmit() {
   if (!submitBtn) return;
-  if (judgeName === 'Unknown Judge') {
+  if (!judgeName || !judgeId) {
+    submitBtn.disabled = true;
+    return;
+  }
+  if (!categorySelect || !categorySelect.value) {
     submitBtn.disabled = true;
     return;
   }
@@ -128,13 +149,17 @@ if (clearBtn) {
   });
 }
 
-// ---------- CHECK JUDGE LIMIT ON PAGE LOAD ----------
+// ---------- Safety check on load: prevent new judges when limit reached ----------
 async function checkJudgeLimitOnLoad() {
   try {
-    const judgesSnapshot = await getDocs(collection(db, 'judges_scores'));
+    const judgesSnapshot = await getDocs(collection(db, 'judges'));
+    // If there are >= 3 judges, only allow submission if current judge is one of them
     if (judgesSnapshot.size >= 3) {
-      alert("⚠️ 3 judges have already submitted results. Submissions are now closed.");
-      if (submitBtn) submitBtn.disabled = true;
+      const isRegistered = judgesSnapshot.docs.some(d => d.id === judgeId || (d.data() && d.data().name === judgeName));
+      if (!isRegistered) {
+        alert("❌ 3 judges have already registered. Submissions are closed.");
+        submitBtn.disabled = true;
+      }
     }
   } catch (err) {
     console.error("Error checking judges limit on load:", err);
@@ -148,13 +173,21 @@ if (scoresForm) {
   scoresForm.addEventListener('submit', async (e) => {
     e.preventDefault();
 
-    if (!judgeName || judgeName === 'Unknown Judge') {
+    // Category check
+    const category = (categorySelect && categorySelect.value) ? categorySelect.value.trim().toLowerCase() : '';
+    if (!category) {
+      alert('Please select a category');
+      return;
+    }
+
+    // Ensure judgeId present
+    if (!judgeId) {
       alert('Judge not found. Please login again.');
       window.location.href = 'login.html';
       return;
     }
 
-    // Check all fields filled
+    // Ensure all inputs filled
     for (const house of HOUSES) {
       for (const c of CRITERIA) {
         const val = Number(document.getElementById(`${house}-${c.key}`)?.value || 0);
@@ -165,25 +198,30 @@ if (scoresForm) {
       }
     }
 
-    // 🔹 NEW: Check if 3 judges have already submitted
+    // Safety: check judges count again and ensure this judge is allowed (server-side check is recommended)
     try {
-      const judgesSnapshot = await getDocs(collection(db, 'judges_scores'));
+      const judgesSnapshot = await getDocs(collection(db, 'judges'));
       if (judgesSnapshot.size >= 3) {
-        alert("❌ Only 3 judges can submit results. Submissions are now closed.");
-        return;
+        const isRegistered = judgesSnapshot.docs.some(d => d.id === judgeId || (d.data() && d.data().name === judgeName));
+        if (!isRegistered) {
+          alert("❌ 3 judges have already registered. Submissions are closed.");
+          return;
+        }
       }
     } catch (err) {
-      console.error("Error checking judges limit:", err);
-      alert("Error verifying judges count. Please try again.");
+      console.error('Error verifying judges count:', err);
+      alert('Error verifying judges count. Try again.');
       return;
     }
 
+    // Build payload: nested `scores` object per house (keeps per-judge doc compact)
     const housesObj = {};
     HOUSES.forEach(house => {
       const hobj = {};
       let total = 0;
       CRITERIA.forEach(c => {
         const val = Number(document.getElementById(`${house}-${c.key}`).value);
+        // Use canonical keys that results.js will understand (normalize handles variants)
         hobj[c.key] = val;
         total += val;
       });
@@ -191,29 +229,39 @@ if (scoresForm) {
       housesObj[house] = hobj;
     });
 
-    const docId = judgeName.replace(/\s+/g, '_').toLowerCase();
-    const payload = { judge: judgeName, houses: housesObj, timestamp: serverTimestamp() };
-
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'Submitting...';
+    // Use a deterministic doc id: `${category}_${judgeId}` so each judge can submit exactly once per category.
+    const docId = `${category}_${judgeId}`;
+    const docRef = doc(db, 'scores', docId);
 
     try {
-      await setDoc(doc(db, 'judges_scores', docId), payload);
-      alert('Scores saved successfully ✅');
+      // Check if this judge already submitted for this category
+      const existing = await getDoc(docRef);
+      if (existing.exists()) {
+        alert('You have already submitted scores for this category.');
+        return;
+      }
 
-      // Reset scores to 0
-      HOUSES.forEach(house => {
-        CRITERIA.forEach(c => {
-          document.getElementById(`${house}-${c.key}`).value = 0;
-        });
-      });
+      // Save the per-judge doc (one doc per judge per category)
+      const payload = {
+        judge: judgeName,
+        judgeId,
+        category,
+        scores: housesObj,
+        timestamp: new Date()
+      };
+
+      await setDoc(docRef, payload);
+
+      alert('Scores submitted successfully ✅');
+
+      // Reset UI
+      renderForm();
+      if (categorySelect) categorySelect.value = '';
+      checkIfCanSubmit();
 
     } catch (err) {
-      console.error(err);
-      alert('Error saving scores: ' + err.message);
-    } finally {
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Submit Scores';
+      console.error('Error submitting scores:', err);
+      alert('Error saving scores: ' + (err.message || err));
     }
   });
 }

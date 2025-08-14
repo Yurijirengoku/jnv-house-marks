@@ -7,7 +7,7 @@ const firebaseConfig = {
   apiKey: "AIzaSyDV5KC17pP8eHXTZctJnbeohn_ZfyLTeHE",
   authDomain: "jnv-house-marks.firebaseapp.com",
   projectId: "jnv-house-marks",
-  storageBucket: "jnv-house-marks.firebasestorage.app",
+  storageBucket: "jnv-house-marks.appspot.com",
   messagingSenderId: "658968257297",
   appId: "1:658968257297:web:cd314cf6aba4ad34fba2b0",
   measurementId: "G-22CTRE43M4"
